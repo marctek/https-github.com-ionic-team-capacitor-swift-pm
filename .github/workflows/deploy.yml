@@ -19,5 +19,8 @@ jobs:
           timeout: 30s
           command_timeout: 10m
           script: |
+            set -e
             cd /var/www/marc-tek.com/
+            git remote set-url origin https://x-access-token:${{ secrets.DEPLOY_TOKEN }}@github.com/${{ github.repository }}.git
+            trap 'git remote set-url origin https://github.com/${{ github.repository }}.git' EXIT
             git pull origin main
