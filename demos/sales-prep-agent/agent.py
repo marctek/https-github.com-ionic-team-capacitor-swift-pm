@@ -15,35 +15,11 @@ Run it:
 import json
 import os
 import anthropic
+import requests
 
 # ─────────────────────────────────────────────
-#  MOCK DATA  (stands in for your real CRM/DB)
+#  MOCK NEWS DATA  (replace web_search() for real search)
 # ─────────────────────────────────────────────
-
-MOCK_CRM = {
-    "acme corp": {
-        "account_id": "ACM-0042",
-        "industry": "Manufacturing",
-        "employees": 1200,
-        "annual_revenue_usd": 85_000_000,
-        "current_products": ["Capacitor Basic", "Capacitor Pro"],
-        "renewal_date": "2026-09-01",
-        "account_manager": "Jordan Lee",
-        "last_contact": "2026-03-12",
-        "notes": "Happy with product; interested in enterprise tier during last call.",
-    },
-    "globex": {
-        "account_id": "GLX-0017",
-        "industry": "Energy",
-        "employees": 400,
-        "annual_revenue_usd": 22_000_000,
-        "current_products": ["Capacitor Basic"],
-        "renewal_date": "2026-07-15",
-        "account_manager": "Sam Rivera",
-        "last_contact": "2026-04-01",
-        "notes": "Price-sensitive; evaluating competitors.",
-    },
-}
 
 MOCK_NEWS = {
     "acme corp": [
@@ -133,10 +109,51 @@ TOOLS = [
 # ─────────────────────────────────────────────
 
 def crm_lookup(company_name: str) -> dict:
-    key = company_name.lower().strip()
-    if key in MOCK_CRM:
-        return {"status": "found", "data": MOCK_CRM[key]}
-    return {"status": "not_found", "message": f"No account found for '{company_name}'."}
+    api_key = os.environ.get("HUBSPOT_API_KEY")
+    if not api_key:
+        return {"status": "error", "message": "HUBSPOT_API_KEY not set."}
+
+    # Search for the company by name
+    search_resp = requests.post(
+        "https://api.hubapi.com/crm/v3/objects/companies/search",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={
+            "filterGroups": [{
+                "filters": [{
+                    "propertyName": "name",
+                    "operator": "CONTAINS_TOKEN",
+                    "value": company_name,
+                }]
+            }],
+            "properties": [
+                "name", "industry", "numberofemployees", "annualrevenue",
+                "hs_object_id", "hubspot_owner_id", "notes_last_contacted",
+                "hs_lastmodifieddate", "description",
+            ],
+            "limit": 1,
+        },
+    )
+
+    if search_resp.status_code != 200:
+        return {"status": "error", "message": f"HubSpot API error: {search_resp.status_code} {search_resp.text}"}
+
+    results = search_resp.json().get("results", [])
+    if not results:
+        return {"status": "not_found", "message": f"No HubSpot account found for '{company_name}'."}
+
+    props = results[0].get("properties", {})
+    return {
+        "status": "found",
+        "data": {
+            "account_id": props.get("hs_object_id"),
+            "name": props.get("name"),
+            "industry": props.get("industry"),
+            "employees": props.get("numberofemployees"),
+            "annual_revenue_usd": props.get("annualrevenue"),
+            "last_contact": props.get("notes_last_contacted"),
+            "description": props.get("description"),
+        },
+    }
 
 
 def web_search(query: str) -> dict:
@@ -282,11 +299,14 @@ Always use all four tools in order. Be concise and business-focused in your fina
 # ─────────────────────────────────────────────
 
 if __name__ == "__main__":
-    # Check for API key
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        print("\n⚠️  Please set your ANTHROPIC_API_KEY environment variable.")
-        print("   Get a free key at: https://console.anthropic.com\n")
-        print("   Then run:  export ANTHROPIC_API_KEY=your_key_here\n")
+    # Check for required API keys
+    missing = [k for k in ("ANTHROPIC_API_KEY", "HUBSPOT_API_KEY") if not os.environ.get(k)]
+    if missing:
+        for k in missing:
+            print(f"\n⚠️  Please set {k}")
+        print("\n  export ANTHROPIC_API_KEY=your_key_here")
+        print("  export HUBSPOT_API_KEY=your_hubspot_private_app_token\n")
+        print("  HubSpot token: Settings → Integrations → Private Apps → Create\n")
         exit(1)
 
     # Demo request — try changing this to "Globex" or your own company name
